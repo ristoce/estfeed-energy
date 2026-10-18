@@ -1,0 +1,18 @@
+# Full upstream HACS validation, including catalog/brand requirements.
+# Run manually once the public repo, description, topics and brand are ready.
+# No checks are ignored. See PUBLISHING.md for custom repo vs catalog inclusion.
+name: HACS validation
+"on":
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  hacs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: hacs/action@main
+        with:
+          category: integration

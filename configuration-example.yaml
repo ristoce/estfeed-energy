@@ -1,0 +1,19 @@
+# Merge this into configuration.yaml; do not replace your existing file.
+estfeed_energy:
+  client_id: !secret estfeed_client_id
+  client_secret: !secret estfeed_client_secret
+  # UTC date. Default 2000-01-01 discovers all accessible account history.
+  # Consider starting with 2026-09-01 for a small trial in a test HA instance.
+  # Version 0.3.1+: history_start may move earlier to extend history, but not later.
+  history_start: "2000-01-01"
+  poll_hours: 6
+  overlap_days: 14
+  backfill_windows_per_run: 2
+  # Optional; omit to discover all meters associated with this key.
+  # metering_point_eics:
+  #   - "YOUR_ELECTRICITY_EIC"
+  #   - "YOUR_GAS_EIC"
+
+# Add these separately to secrets.yaml, replacing the placeholders:
+# estfeed_client_id: "YOUR_NEW_CLIENT_ID"
+# estfeed_client_secret: "YOUR_NEW_CLIENT_SECRET"
