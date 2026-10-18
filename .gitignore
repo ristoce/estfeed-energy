@@ -1,0 +1,58 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.venv/
+venv/
+
+# Private Home Assistant configuration and runtime data
+.env
+.env.*
+secrets.yaml
+configuration.yaml
+.storage/
+home-assistant*.db*
+home-assistant*.log*
+
+# Generated archives and build output
+dist/
+build/
+*.zip
+
+# Local development reports
+/API-test-report.md
+/ELECTRICITY-API-TEST-*.md
+/PRICE-SIGNALS-TEST-*.md
+/HACS-VALIDATION.md
+
+# Local research, downloads and raw API responses
+/research/
+/scratch/
+/tmp/
+/temp/
+/downloads/
+/input/
+/upload/
+/reports/
+/raw-data/
+/api-responses/
+
+# Editor and operating-system files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+/PUBLISHING.md
+/UPGRADE-0.3.1.md
+/UPGRADE-0.3.2.md
+/UPGRADE-0.3.3.md
+/UPGRADE-0.4.0.md

@@ -1,0 +1,540 @@
+type: custom:button-card
+entity: sensor.estfeed_import_status
+show_name: false
+show_icon: false
+show_state: false
+variables:
+  years_back: 5
+  theme_mode: auto
+  day_palette:
+    color_current_year: '#00877E'
+    color_previous_year: '#AD6508'
+    color_two_years_ago: '#7451CE'
+    older_year_colors:
+      - '#C33F73'
+      - '#2479B5'
+      - '#738412'
+      - '#B34B22'
+      - '#2D8170'
+      - '#815FB3'
+      - '#925F25'
+      - '#3B7892'
+    panel_background: '#FFFFFF'
+    control_background: '#F1F5F9'
+    text_color: '#17233B'
+    muted_text_color: '#62718A'
+    grid_color: rgba(98,113,138,0.18)
+    active_button_text: '#FFFFFF'
+  night_palette:
+    color_current_year: '#4ED8CB'
+    color_previous_year: '#FFB36B'
+    color_two_years_ago: '#AC9BFF'
+    older_year_colors:
+      - '#FF88B2'
+      - '#74B9FF'
+      - '#CADB75'
+      - '#F28E68'
+      - '#88C9AD'
+      - '#D5A1E8'
+      - '#D7B47B'
+      - '#8DD1DF'
+    panel_background: '#122039'
+    control_background: '#1C2D48'
+    text_color: '#F1F5FF'
+    muted_text_color: '#9BAEC9'
+    grid_color: rgba(155,174,201,0.14)
+    active_button_text: '#102033'
+  chart_height: 320
+  show_unit_price: true
+  match_elapsed_days: false
+  year_offsets: >-
+    [[[
+
+    const value=Number(variables.years_back ?? 2);
+
+    const
+    back=Number.isFinite(value)?Math.max(0,Math.min(10,Math.floor(value))):2;
+
+    return Array.from({length:back+1},(_,i)=>i);
+
+    ]]]
+  palette: >-
+    [[[
+
+    const mode=String(variables.theme_mode||'auto').toLowerCase();
+
+    const
+    dark=mode==='night'||mode==='dark'||(mode!=='day'&&mode!=='light'&&(hass.themes?.darkMode
+    ?? window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? true));
+
+    return
+    {...(dark?variables.night_palette:variables.day_palette),dark_mode:dark};
+
+    ]]]
+  chart_factory: |-
+    [[[
+    return (commodity, field, unit, title) => {
+      const status = states['sensor.estfeed_import_status'];
+      if (!status) return {type:'markdown',content:'Estfeed status sensor not found. Replace sensor.estfeed_import_status in this YAML with your actual entity ID.'};
+      const meters = Object.entries(status.attributes.meters || {}).filter(([eic,m]) => m.commodity === commodity && m.statistic_ids?.[field]).map(([eic,m]) => {
+        const meta=status.attributes.costs?.[eic];
+        // Existing Recorder costs can outlive the diagnostic metadata. Only derive
+        // IDs using this integration's known consumption-statistic naming scheme.
+        const id=m.statistic_ids[field];
+        const fallback=/^estfeed_energy:.*_consumption(kwh|m3)$/.test(id)?id.replace(/_consumption(kwh|m3)$/,'_consumption_cost'):null;
+        return {...m,cost:{...meta,statistic_id:meta?.statistic_id||fallback,status_known:!!meta}};
+      });
+      if (!meters.length) return {type:'markdown',content:`No imported ${title.toLowerCase()} statistics found yet.`};
+      const zone = hass.config.time_zone;
+      const parts = (value, tz) => Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+        timeZone:tz,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'
+      }).formatToParts(new Date(value)).filter(p=>p.type!=='literal').map(p=>[p.type,Number(p.value)]));
+      const midnight = (year,month,day,tz) => {
+        const target=Date.UTC(year,month-1,day);let time=target;
+        for(let i=0;i<4;i++) {const p=parts(time,tz);const next=target-(Date.UTC(p.year,p.month-1,p.day,p.hour,p.minute,p.second)-time);if(next===time)break;time=next;}
+        return time;
+      };
+      const now=parts(Date.now(),zone);
+      const names=['January','February','March','April','May','June','July','August','September','October','November','December'];
+      const selection=states['input_select.energy_comparison_month']?.state;
+      const selectedMonth=names.indexOf(selection)+1 || now.month;
+      const monthly=states['input_select.energy_comparison_resolution']?.state==='Month';
+      const renderZone=hass.locale?.time_zone==='server' ? zone : Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const renderNow=parts(Date.now(),renderZone);
+      // A leap-year display axis accommodates February 29. Tooltips omit that display year.
+      const anchorMonth=monthly?1:selectedMonth;
+      const graphStart=midnight(2000,anchorMonth,1,renderZone);
+      const graphEnd=monthly?midnight(2001,1,1,renderZone):midnight(anchorMonth===12?2001:2000,anchorMonth===12?1:anchorMonth+1,1,renderZone);
+      const spanStart=midnight(renderNow.year,monthly?1:renderNow.month,1,renderZone);
+      const offset=graphStart-spanStart;
+      const latest=meters.map(m=>m.latest_reported_intervals?.[field]).filter(Boolean).sort()[0];
+      const args={zone,renderZone,baseYear:now.year,month:selectedMonth,monthly,latest,matchElapsed: variables.match_elapsed_days===true,
+        ids:meters.map(m=>m.statistic_ids[field]), costs:meters.map(m=>m.cost||null)};
+      args.tooltipKey=JSON.stringify([args,field,unit]);
+      const generator=async function(cfg,hass,moment,start) {
+        const sourceYear=cfg.baseYear-cfg.back;
+        const cache=window.__estfeedComparisonTooltipV13 ||= new Map();
+        const cacheKey=cfg.tooltipKey+'|'+cfg.back;
+        cache.delete(cacheKey);
+        while(cache.size>60)cache.delete(cache.keys().next().value);
+        const dayStart=(year,month,day)=>moment.tz({year,month:month-1,day,hour:0},cfg.zone);
+        const now=moment.tz(cfg.zone);
+        let cutoff=now.clone().startOf('day').subtract(1,'day');
+        if(cfg.latest) {const latest=moment.tz(cfg.latest,cfg.zone).startOf('day');if(latest.isBefore(cutoff))cutoff=latest;}
+        const first=dayStart(sourceYear,cfg.monthly?1:cfg.month,1);
+        const finish=first.clone().add(1,cfg.monthly?'year':'month');
+        const end=finish.isAfter(now)?now:finish;
+        let response={};
+        if(first.isBefore(end)) {
+          response=await hass.callWS({type:'recorder/statistics_during_period',start_time:first.toISOString(),
+            end_time:end.toISOString(),statistic_ids:[...new Set([...cfg.ids,...cfg.costs.map(c=>c?.statistic_id).filter(Boolean)])],period:'day',types:['change']});
+        }
+        const makeMap=id=>{
+          const map=new Map();
+          for(const row of response[id]||[]) {
+            if(typeof row.change!=='number'||!Number.isFinite(row.change))continue;
+            const date=moment.tz(row.start,cfg.zone);
+            if(date.year()===sourceYear)map.set(`${date.month()+1}-${date.date()}`,row.change);
+          }
+          return map;
+        };
+        const maps=cfg.ids.map(makeMap);
+        const costMaps=cfg.costs.map(c=>c?.statistic_id?makeMap(c.statistic_id):new Map());
+        const daily=(month,day)=>{
+          const key=`${month}-${day}`;
+          if(maps.some(map=>!map.has(key)))return null;
+          return maps.reduce((sum,map)=>sum+map.get(key),0);
+        };
+        const dailyCost=(month,day)=>{
+          const key=`${month}-${day}`;
+          let value=0,found=0,uncertain=false;
+          for(let i=0;i<costMaps.length;i++) {
+            const meta=cfg.costs[i];
+            const date=dayStart(sourceYear,month,day);
+            if(!meta?.statistic_id || !costMaps[i].has(key))continue;
+            if(meta.last_priced_hour && date.isAfter(moment.tz(meta.last_priced_hour,cfg.zone),'day'))continue;
+            value+=costMaps[i].get(key);found++;
+            // The first gap cannot identify which later days are complete. Show
+            // Recorder's value with a qualification instead of hiding all later costs.
+            if(!meta.status_known || (meta.first_unpriced_hour && !date.isBefore(moment.tz(meta.first_unpriced_hour,cfg.zone),'day')))uncertain=true;
+          }
+          return {value:found?value:null,missing:found<costMaps.length,uncertain};
+        };
+        const limit=(month)=>{
+          let days=dayStart(sourceYear,month,1).daysInMonth();
+          if(sourceYear===cfg.baseYear && (cutoff.year()<cfg.baseYear || month>cutoff.month()+1))return 0;
+          // Past years show full months by default. Matching elapsed days is opt-in.
+          if((sourceYear===cfg.baseYear || cfg.matchElapsed) && cutoff.year()===cfg.baseYear && month===cutoff.month()+1)days=Math.min(days,cutoff.date());
+          return days;
+        };
+        const points=[],details=[];
+        const axis=moment.tz(start,cfg.renderZone);
+        if(cfg.monthly) {
+          for(let month=1;month<=12;month++) {
+            const days=limit(month);let sum=0,cost=0,complete=days>0,costFound=false,costMissing=false,costUncertain=false;
+            for(let day=1;day<=days;day++) {
+              const value=daily(month,day),charge=dailyCost(month,day);
+              if(value===null)complete=false;else sum+=value;
+              if(charge.value!==null){cost+=charge.value;costFound=true;}
+              costMissing ||= charge.missing;
+              costUncertain ||= charge.uncertain;
+            }
+            points.push([axis.clone().month(month-1).date(15).hour(12).valueOf(),complete?sum:null]);
+            details.push({quantity:complete?sum:null,cost:complete&&costFound?cost:null,
+              costNote:!costFound?'No cost records':costMissing?'Partial cost':costUncertain?'Coverage unknown':'',
+              label:dayStart(sourceYear,month,1).format('MMMM'),
+              range:days>0&&days<dayStart(sourceYear,month,1).daysInMonth()?`Days 1–${days} · partial month`:'Full month'});
+          }
+        } else {
+          const length=axis.daysInMonth();
+          for(let day=1;day<=length;day++) {
+            const quantity=day<=limit(cfg.month)?daily(cfg.month,day):null;
+            points.push([axis.clone().date(day).hour(12).valueOf(),quantity]);
+            const charge=dailyCost(cfg.month,day);
+            details.push({quantity,cost:quantity===null?null:charge.value,
+              costNote:charge.value===null?'No cost records':charge.missing?'Partial cost':charge.uncertain?'Coverage unknown':'',
+              label:`${day} ${dayStart(sourceYear,cfg.month,1).format('MMMM')}`,range:''});
+          }
+        }
+        cache.set(cacheKey,{year:sourceYear,details});
+        return points;
+      };
+      const theme=variables.palette||variables;
+      const offsets=variables.year_offsets;
+      const configuredColors=[theme.color_current_year,theme.color_previous_year,theme.color_two_years_ago,...(theme.older_year_colors||[])];
+      const colors=offsets.map(back=>configuredColors[back]||`hsl(${Math.round((back*137.508+165)%360)},65%,${theme.dark_mode===false?40:68}%)`);
+      const tooltip=function(ctx,key,unit,colors,showUnitPrice){
+        const e=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        const number=(v,digits=2)=>new Intl.NumberFormat(undefined,{minimumFractionDigits:digits,maximumFractionDigits:digits}).format(v);
+        const cache=window.__estfeedComparisonTooltipV13;
+        const hidden=ctx.w?.globals?.collapsedSeriesIndices||[];
+        const expanded=ctx.expanded===true;
+        let rows='',label='',uncertain=false,partial=false;
+        for(let i=0;i<ctx.series.length;i++) {
+          if(hidden.includes(i))continue;
+          const entry=cache?.get(key+'|'+i),point=entry?.details[ctx.dataPointIndex];
+          const quantity=ctx.series[i]?.[ctx.dataPointIndex];
+          if(typeof quantity!=='number'||!Number.isFinite(quantity))continue;
+          const aligned=point&&point.quantity!==null&&Math.abs(point.quantity-quantity)<0.000001;
+          const cost=aligned?point.cost:null;
+          const costNote=aligned?point.costNote:'Reload chart';
+          const provisional=cost!==null&&costNote==='Coverage unknown';
+          const missing=cost!==null&&costNote==='Partial cost';
+          uncertain ||= provisional;partial ||= missing;
+          const mark=provisional?'*':missing?'†':'';
+          const charge=cost===null?'Unavailable':number(cost)+' €'+mark;
+          // The global first gap does not tell us the actual gaps in this period.
+          // Show the recorded ratio explicitly as provisional, never as a verified tariff.
+          const average=cost===null||quantity<=0||(costNote&&!provisional)?'—':number(cost/quantity,4)+' €/'+e(unit)+mark;
+          const year=`<span style="color:${e(colors[i])};font-weight:700">● ${e(entry?.year||ctx.w.config.series[i].name)}</span>`;
+          const range=e(point?.range||'');
+          label=point?.label||label;
+          if(expanded){
+            rows+=`<div style="padding:10px 0;border-top:1px solid var(--ef-grid)"><div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:7px">${year}<span style="font-size:10px;color:var(--ef-muted)">${range}</span></div><div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline"><span style="font-weight:600">${number(quantity)} ${e(unit)}</span><span style="font-weight:700;font-size:13px">${charge}</span></div>${cost===null?`<div style="margin-top:4px;font-size:10px;color:var(--ef-muted);text-align:right">${e(costNote)}</div>`:''}${showUnitPrice?`<div style="font-size:10px;margin-top:5px;color:var(--ef-muted)">Average price ${average}</div>`:''}</div>`;
+          }else{
+            const cell='padding:3px 0 3px 10px;text-align:right;white-space:nowrap;border-top:1px solid var(--ef-grid);';
+            rows+=`<tr><td style="padding:3px 0;text-align:left;border-top:1px solid var(--ef-grid)">${year}<div style="font-size:9px;color:var(--ef-muted);margin-top:2px;max-width:115px;white-space:normal">${range}</div></td><td style="${cell}">${number(quantity)} ${e(unit)}</td><td style="${cell}">${charge}${cost===null?`<div style="font-size:9px;color:var(--ef-muted)">${e(costNote)}</div>`:''}</td>${showUnitPrice?`<td style="${cell}">${average}</td>`:''}</tr>`;
+          }
+        }
+        if(!rows)return '';
+        const notes=[uncertain?'':'',partial?'† Partial cost: some cost records are missing; average omitted.':''].filter(Boolean).join('<br>');
+        const heading='<div style="font-size:10px;color:var(--ef-muted);padding-bottom:8px">CONSUMPTION &amp; RECORDED COST</div>';
+        const table=expanded?rows:`<table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="font-size:10px;color:var(--ef-muted);text-align:right"><th style="text-align:left;font-weight:400;padding-bottom:5px">Year / range</th><th style="font-weight:400;padding:0 0 5px 12px">Usage</th><th style="font-weight:400;padding:0 0 5px 12px">Cost</th>${showUnitPrice?'<th style="font-weight:400;padding:0 0 5px 12px">Average price</th>':''}</tr></thead><tbody>${rows}</tbody></table>`;
+        return `<div style="box-sizing:border-box;width:${expanded?'100%':'max-content'};max-width:calc(100vw - 48px);padding:${expanded?'12px 16px':'8px 10px'};background:var(--ef-panel,#122039);color:var(--ef-text,#f1f5ff);font-family:inherit;font-size:12px;font-variant-numeric:tabular-nums;white-space:normal"><div style="font-size:14px;font-weight:700;padding-bottom:5px">${e(label)}</div>${expanded?heading:''}${table}${notes?`<div style="font-size:9px;line-height:1.4;color:var(--ef-muted);margin-top:7px;max-width:380px">${notes}</div>`:''}</div>`;
+      };
+      const text=theme.text_color||'#F1F5FF',muted=theme.muted_text_color||'#9BAEC9';
+      const grid=theme.grid_color||'rgba(155,174,201,0.14)';
+      const touchOnly=!!window.matchMedia?.('(hover: none)').matches;
+      const touchLegend=function(chart){
+        const host=chart.el;
+        if(!host)return;
+        if(!host.querySelector('style[data-estfeed-touch]')){
+          const style=document.createElement('style');style.dataset.estfeedTouch='';
+          style.textContent=`.apexcharts-legend-series{box-sizing:border-box;min-height:34px;min-width:48px;padding:0 7px!important;border:1px solid var(--ef-grid);border-radius:12px;background:var(--ef-control);display:inline-flex!important;align-items:center;justify-content:center;touch-action:manipulation;cursor:pointer}.apexcharts-legend-series:focus-visible{outline:2px solid var(--ef-accent);outline-offset:2px}.apexcharts-legend-marker{margin-right:6px!important}.apexcharts-tooltip{pointer-events:none!important;max-width:calc(100% - 8px)!important;white-space:normal!important}.apexcharts-tooltip>div{max-width:100%!important}`;
+          // Auto margins center any number of years when they fit; overflow stays scrollable.
+          style.textContent+=`.apexcharts-legend{flex-wrap:nowrap!important;justify-content:flex-start!important;overflow-x:auto!important;overflow-y:hidden!important;overscroll-behavior-x:contain;scrollbar-width:thin;padding-bottom:4px!important}.apexcharts-legend-series{flex:0 0 auto!important}.apexcharts-legend-series:first-child{margin-left:auto!important}.apexcharts-legend-series:last-child{margin-right:auto!important}`;
+          host.appendChild(style);
+        }
+        host.querySelectorAll('.apexcharts-legend-series').forEach((item,index)=>{
+          const name=chart.w.config.series[index]?.name;
+          if(!name)return;
+          item.setAttribute('role','button');item.setAttribute('tabindex','0');
+          item.setAttribute('aria-label','Toggle '+name);
+          item.setAttribute('aria-pressed',String(!chart.w.globals.collapsedSeriesIndices.includes(index)));
+          if(item.dataset.estfeedBound)return;
+          item.dataset.estfeedBound='1';
+          const toggle=event=>{event.preventDefault();event.stopPropagation();chart.toggleSeries(name);};
+          item.addEventListener('click',toggle);
+          item.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){toggle(event);}});
+        });
+        // Touch is selection, not hover. A persistent, normal-flow details panel
+        // avoids a tooltip under the finger, clipped popups and accidental scrolling.
+        if(!host._estfeedTouchBound){
+          host._estfeedTouchBound=true;
+          let down=null;
+          host.addEventListener('pointerdown',event=>{
+            down=(event.pointerType==='touch'||event.pointerType==='pen')?{x:event.clientX,y:event.clientY}:null;
+          },{passive:true});
+          host.addEventListener('pointercancel',()=>{down=null;},{passive:true});
+          host.addEventListener('pointerup',event=>{
+            if(!down)return;
+            const moved=Math.hypot(event.clientX-down.x,event.clientY-down.y);down=null;
+            if(moved>12)return;
+            const rect=host.querySelector('.apexcharts-grid')?.getBoundingClientRect();
+            if(!rect||!rect.width||event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom)return;
+            const globals=chart.w.globals;
+            const target=globals.minX+(event.clientX-rect.left)/rect.width*(globals.maxX-globals.minX);
+            let best=-1,distance=Infinity;
+            globals.seriesX.forEach((xs,seriesIndex)=>{
+              if(globals.collapsedSeriesIndices.includes(seriesIndex))return;
+              xs.forEach((x,index)=>{
+                if(!Number.isFinite(globals.series[seriesIndex]?.[index]))return;
+                const diff=Math.abs(x-target);if(diff<distance){distance=diff;best=index;}
+              });
+            });
+            if(best<0)return;
+            host._estfeedSelectedPoint=best;
+            host._estfeedRenderDetails();
+          },{passive:true});
+        }
+        host._estfeedRenderDetails=()=>{
+          if(host._estfeedSelectedPoint==null)return;
+          const render=chart.w.config.tooltip.custom;
+          if(typeof render!=='function')return;
+          const html=render({expanded:true,series:chart.w.globals.series,dataPointIndex:host._estfeedSelectedPoint,w:chart.w});
+          let details=host.querySelector('[data-estfeed-details]');
+          if(!html){if(details)details.hidden=true;return;}
+          if(!details){
+            details=document.createElement('div');details.dataset.estfeedDetails='';
+            details.style.cssText='margin:0 12px 12px;border:1px solid var(--ef-grid);border-radius:12px;background:var(--ef-panel);overflow:hidden;text-align:left;';
+            const close=document.createElement('button');close.type='button';close.textContent='Close details';
+            close.style.cssText='display:block;margin:4px 8px 0 auto;min-height:44px;padding:0 12px;border:0;background:transparent;color:var(--ef-muted);font:inherit;font-size:12px;touch-action:manipulation;cursor:pointer;';
+            close.addEventListener('click',event=>{event.stopPropagation();details.hidden=true;host._estfeedSelectedPoint=null;});
+            const body=document.createElement('div');body.dataset.estfeedDetailBody='';body.setAttribute('aria-live','polite');
+            details.append(close,body);host.append(details);
+          }
+          details.hidden=false;
+          const body=details.querySelector('[data-estfeed-detail-body]');body.innerHTML=html;
+          if(body.firstElementChild)body.firstElementChild.style.width='100%';
+        };
+        host._estfeedRenderDetails();
+      };
+      const legendHook='EVAL:'+touchLegend.toString();
+      return {
+        type:'custom:apexcharts-card',graph_span:`${graphEnd-graphStart}ms`,span:{start:monthly?'year':'month',offset:`${offset>=0?'+':'-'}${Math.abs(offset)}ms`},
+        update_interval:'15min',cache:false,
+        header:{show:false},
+        series:offsets.map(back=>({entity:'sensor.estfeed_import_status',name:String(now.year-back),unit,type:'line',color:colors[back],float_precision:2,stroke_width:back===0?3:2,curve:'straight',
+          extend_to:false,show:{legend_value:false,in_header:false},
+          data_generator:`return (${generator.toString()})(${JSON.stringify({...args,back})},hass,moment,start);`})),
+        apex_config:{
+          chart:{height:Number(variables.chart_height)||320,background:'transparent',foreColor:muted,fontFamily:'inherit',toolbar:{show:false},zoom:{enabled:false},animations:{enabled:false},events:{mounted:legendHook,updated:legendHook}},
+          theme:{mode:theme.dark_mode===false?'light':'dark'},
+          dataLabels:{enabled:false},stroke:{lineCap:'round'},
+          legend:{show:true,showForSingleSeries:true,position:'top',horizontalAlign:'center',height:34,fontSize:'13px',labels:{colors:muted},markers:{width:10,height:10,radius:10},itemMargin:{horizontal:4,vertical:6},onItemClick:{toggleDataSeries:false},onItemHover:{highlightDataSeries:false}},
+          markers:{size:monthly?4:2,strokeWidth:0,hover:{size:7}},
+          xaxis:{axisBorder:{show:false},axisTicks:{show:false},crosshairs:{stroke:{color:muted,width:1,dashArray:4}},tooltip:{enabled:false},
+            labels:{datetimeUTC:false,format:monthly?'MMM':'dd',hideOverlappingLabels:true,style:{colors:muted,fontSize:'11px'}}},
+          tooltip:{enabled:!touchOnly,shared:true,intersect:false,followCursor:false,theme:theme.dark_mode===false?'light':'dark',custom:`EVAL:function(ctx){return (${tooltip.toString()})(ctx,${JSON.stringify(args.tooltipKey)},${JSON.stringify(unit)},${JSON.stringify(colors)},${variables.show_unit_price!==false});}`},
+          yaxis:{min:0,tickAmount:4,decimalsInFloat:unit==='kWh'?0:1,labels:{style:{colors:[muted],fontSize:'11px'}}},
+          grid:{borderColor:grid,strokeDashArray:3,padding:{left:8,right:18,top:8,bottom:4},xaxis:{lines:{show:false}},yaxis:{lines:{show:true}}},
+          noData:{text:'Waiting for imported history',style:{color:muted,fontSize:'13px'}}
+        }
+      };
+    };
+
+    ]]]
+  controls_factory: |-
+    [[[
+    return () => {
+      const resolution='input_select.energy_comparison_resolution';
+      const month='input_select.energy_comparison_month';
+      const daily=states[resolution]?.state!=='Month';
+      const style={
+        card:[{height:'44px'},{padding:'0 12px'},{background:'var(--ef-control)'},{color:'var(--ef-text)'},{border:'1px solid var(--ef-grid)'},{'border-radius':'12px'},{'box-shadow':'none'}],
+        name:[{'font-size':'13px'},{'font-weight':'600'}],
+        icon:[{width:'20px'},{color:'var(--ef-text)'}]
+      };
+      const button=(name,entity,tap,active=false)=>({
+        type:'custom:button-card',name,entity,show_icon:false,tap_action:tap,hold_action:{action:'none'},
+        styles:{...style,card:[...style.card,...(active?[{background:'var(--ef-accent)'},{color:'var(--ef-on-accent)'},{border:'1px solid var(--ef-accent)'}]:[])]}
+      });
+      const choose=option=>({action:'call-service',service:'input_select.select_option',service_data:{entity_id:resolution,option}});
+      const children={day:{card:button('Day',resolution,choose('Day'),daily)},month:{card:button('Month',resolution,choose('Month'),!daily)}};
+      if(daily) {
+        for(const [name,service,icon] of [['prev','select_previous','mdi:chevron-left'],['next','select_next','mdi:chevron-right']]) {
+          children[name]={card:{...button(name==='prev'?'Previous month':'Next month',month,{action:'call-service',service:'input_select.'+service,service_data:{entity_id:month,cycle:true}}),show_icon:true,show_name:false,icon}};
+        }
+        children.picker={card:button(states[month]?.state||'Choose month',month,{action:'more-info',entity:month})};
+      }
+      return {
+        type:'custom:button-card',show_name:false,show_icon:false,tap_action:{action:'none'},hold_action:{action:'none'},
+        styles:{card:[{padding:'0'},{background:'none'},{border:'none'},{'box-shadow':'none'}],
+          grid:[{'grid-template-areas':daily?'"day day day month month month" "prev picker picker picker picker next"':'"day month"'},
+            {'grid-template-columns':daily?'44px 1fr 1fr 1fr 1fr 44px':'1fr 1fr'},{gap:'8px'}],
+          custom_fields:Object.fromEntries(Object.keys(children).map(k=>[k,[{'min-width':'0'},{width:'100%'}]]))},
+        custom_fields:children
+      };
+    };
+
+    ]]]
+  panel_factory: |-
+    [[[
+    return (commodity,field,unit,title) => {
+      const chart=variables.chart_factory(commodity,field,unit,title);
+      if(chart.type!=='custom:apexcharts-card')return chart;
+      const daily=states['input_select.energy_comparison_resolution']?.state!=='Month';
+      const month=states['input_select.energy_comparison_month']?.state||'Current month';
+      const caption=(daily?month+' · daily':'Monthly')+' / '+unit;
+      const escape=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+      return {
+        type:'custom:button-card',show_name:false,show_icon:false,tap_action:{action:'none'},hold_action:{action:'none'},
+        styles:{card:[{padding:'0'},{background:'var(--ef-panel)'},{'border-radius':'20px'},{border:'1px solid var(--ef-grid)'},{overflow:'visible'},
+          {'--ha-card-background':'transparent'},{'--card-background-color':'transparent'},{'--ha-card-border-width':'0'},{'--ha-card-box-shadow':'none'}],
+          grid:[{'grid-template-areas':'"heading" "chart"'},{'grid-template-columns':'minmax(0,1fr)'},{'grid-template-rows':'auto auto'},{'row-gap':'0'}],
+          custom_fields:{heading:[{'text-align':'left'},{'white-space':'normal'},{'min-width':'0'}],chart:[{width:'100%'},{'min-width':'0'},{'text-align':'left'}]}},
+        custom_fields:{heading:`<div style="padding:20px 20px 8px;color:var(--ef-text)"><div style="font-size:21px;font-weight:650;line-height:1.3">${escape(title)}</div><div style="margin-top:6px;font-size:11px;line-height:1.5;color:var(--ef-muted)">${escape(caption)}</div></div>`,chart:{card:chart}}
+      };
+    };
+
+    ]]]
+triggers_update:
+  - sensor.estfeed_import_status
+  - input_select.energy_comparison_resolution
+  - input_select.energy_comparison_month
+tap_action:
+  action: none
+hold_action:
+  action: none
+styles:
+  card:
+    - padding: '0'
+    - background: none
+    - box-shadow: none
+    - border: none
+    - overflow: visible
+    - --ha-card-border-radius: 20px
+    - --ha-card-border-width: 1px
+    - --ha-card-border-color: var(--ef-grid)
+    - --ha-card-box-shadow: 0 8px 28px rgba(0,0,0,0.12)
+    - --ef-panel: |-
+        [[[
+        return variables.palette.panel_background;
+        ]]]
+    - --ef-control: |-
+        [[[
+        return variables.palette.control_background;
+        ]]]
+    - --ef-text: |-
+        [[[
+        return variables.palette.text_color;
+        ]]]
+    - --ef-muted: |-
+        [[[
+        return variables.palette.muted_text_color;
+        ]]]
+    - --ef-grid: |-
+        [[[
+        return variables.palette.grid_color;
+        ]]]
+    - --ef-accent: |-
+        [[[
+        return variables.palette.color_current_year;
+        ]]]
+    - --ef-on-accent: |-
+        [[[
+        return variables.palette.active_button_text;
+        ]]]
+    - --ha-card-background: |-
+        [[[
+        return variables.palette.panel_background;
+        ]]]
+    - --card-background-color: |-
+        [[[
+        return variables.palette.panel_background;
+        ]]]
+    - --primary-text-color: |-
+        [[[
+        return variables.palette.text_color;
+        ]]]
+    - --secondary-text-color: |-
+        [[[
+        return variables.palette.muted_text_color;
+        ]]]
+    - --divider-color: |-
+        [[[
+        return variables.palette.grid_color;
+        ]]]
+  grid:
+    - grid-template-areas: '"heading" "controls" "electricity" "gas" "note"'
+    - grid-template-columns: minmax(0, 1fr)
+    - row-gap: 14px
+  custom_fields:
+    heading:
+      - width: 100%
+      - min-width: '0'
+      - text-align: left
+      - white-space: normal
+    controls:
+      - width: 100%
+      - min-width: '0'
+      - text-align: left
+      - white-space: normal
+    electricity:
+      - width: 100%
+      - min-width: '0'
+      - text-align: left
+      - white-space: normal
+    gas:
+      - width: 100%
+      - min-width: '0'
+      - text-align: left
+      - white-space: normal
+    note:
+      - width: 100%
+      - min-width: '0'
+      - text-align: left
+      - white-space: normal
+custom_fields:
+  heading: >-
+    [[[
+
+    const year = new
+    Intl.DateTimeFormat('en-GB',{timeZone:hass.config.time_zone,year:'numeric'}).format(new
+    Date());
+
+    return `<div style="box-sizing:border-box;padding:22px
+    24px;background:var(--ef-panel);border:1px solid
+    var(--ef-grid);border-radius:20px;color:var(--ef-text)"><div
+    style="font-size:10px;font-weight:700;letter-spacing:2px;color:var(--ef-accent);margin-bottom:8px">ENERGY
+    HISTORY</div><div
+    style="font-size:25px;font-weight:650;letter-spacing:-0.6px;line-height:1.3">Energy
+    comparison</div><div
+    style="margin-top:7px;color:var(--ef-muted);font-size:12px">${variables.year_offsets.map(back=>Number(year)-back).join('
+    &nbsp; / &nbsp; ')}</div></div>`;
+
+    ]]]
+  controls:
+    force_recreate: true
+    card: |-
+      [[[
+      return variables.controls_factory();
+      ]]]
+  electricity:
+    force_recreate: true
+    card: >-
+      [[[
+
+      return variables.panel_factory("ELECTRICITY", "consumptionKwh", "kWh",
+      "Electricity");
+
+      ]]]
+  gas:
+    force_recreate: true
+    card: >-
+      [[[
+
+      return variables.panel_factory("NATURAL_GAS", "consumptionM3", "m³",
+      "Gas");
+
+      ]]]

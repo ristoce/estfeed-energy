@@ -1,0 +1,43 @@
+# Add pricing INSIDE your existing estfeed_energy block.
+# These are illustrative rates, not your actual contract prices.
+# Keep your existing history_start and credentials unchanged.
+estfeed_energy:
+  client_id: !secret estfeed_client_id
+  client_secret: !secret estfeed_client_secret
+  history_start: "2000-01-01"
+  pricing:
+    electricity:
+      - from: "2026-10-01T00:00:00+03:00"
+        mode: spot
+        margin: 0.01        # EUR/kWh added to the Estonian market price
+        multiplier: 1.0    # Set explicitly if tax must be added to BOTH price and margin
+    gas:
+      - from: "2026-10-01T00:00:00+03:00"
+        mode: fixed
+        price: 0.07         # Example only: EUR/kWh
+        margin: 0.0         # EUR/kWh
+        multiplier: 1.0
+        unit: kWh           # Or m3, with price and margin then expressed in EUR/m3
+
+# For fixed electricity, replace its tariff entry with:
+# electricity:
+#   - from: "2026-10-01T00:00:00+03:00"
+#     mode: fixed
+#     price: 0.15           # Example only: EUR/kWh
+#     margin: 0.0
+#     multiplier: 1.0
+
+# To change a contract later, KEEP the earlier entry and append a new one:
+#   - from: "2026-11-01T00:00:00+02:00"
+#     mode: spot
+#     margin: 0.012
+#     multiplier: 1.0
+
+# For Estfeed DAILY gas market price, replace the gas entry with:
+# gas:
+#   - from: "2026-10-01T00:00:00+03:00"  # Preserve your existing earliest from-date.
+#     mode: spot
+#     unit: kWh
+#     margin: 0.01           # Example only: EUR/kWh, before the multiplier
+#     multiplier: 1.0        # Adds no tax. The API's pre-VAT price is used.
+# This is the daily Estfeed series, not an assumed monthly supplier tariff.

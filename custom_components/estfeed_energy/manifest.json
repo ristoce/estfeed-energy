@@ -1,0 +1,19 @@
+{
+  "domain": "estfeed_energy",
+  "name": "Estfeed Energy History",
+  "after_dependencies": [
+    "sensor"
+  ],
+  "codeowners": [
+    "@ristoruuben"
+  ],
+  "dependencies": [
+    "recorder"
+  ],
+  "documentation": "https://github.com/ristoruuben/estfeed-energy.git",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/ristoruuben/estfeed-energy.git/issues",
+  "requirements": [],
+  "version": "0.4.1"
+}
