@@ -1,0 +1,32 @@
+# Example for a device that can safely be interrupted. Disabled until you edit it.
+# Paste into automations.yaml as a LIST item, or omit the first '-' in the UI editor.
+# Replace switch.your_flexible_device, then enable this automation in HA.
+# For a heat pump, prefer changing its operating target/mode to cutting power.
+- id: estfeed_price_control_example
+  alias: Estfeed · flexible device price control
+  initial_state: false
+  mode: restart
+  triggers:
+    # No from/to filter: also responds when the price becomes available after startup.
+    - trigger: state
+      entity_id: sensor.estfeed_electricity_price_high_low
+    - trigger: homeassistant
+      event: start
+    - trigger: time_pattern
+      minutes: /15
+      seconds: '5'
+  actions:
+    - choose:
+        - conditions:
+            - condition: state
+              entity_id: sensor.estfeed_electricity_price_high_low
+              state: low
+          sequence:
+            - action: switch.turn_on
+              target:
+                entity_id: switch.your_flexible_device
+      default:
+        # High, unknown and unavailable all prevent this optional load from running.
+        - action: switch.turn_off
+          target:
+            entity_id: switch.your_flexible_device

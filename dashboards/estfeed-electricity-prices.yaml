@@ -1,0 +1,147 @@
+# Paste as ONE manual dashboard card. Requires ApexCharts Card v2.2+ (HACS).
+# Built-in tiles/markdown use your HA light/dark theme; no Mushroom dependency.
+# Enable price_signals first. Adjust entity IDs here if HA added a suffix.
+# Chart colors: Today #14B8A6, Tomorrow #F59E0B, Cheap threshold #94A3B8.
+type: vertical-stack
+cards:
+  - type: grid
+    columns: 2
+    square: false
+    cards:
+      - type: tile
+        entity: sensor.estfeed_electricity_current_price
+        name: Current · 15 min
+        icon: mdi:flash
+        color: teal
+      - type: tile
+        entity: sensor.estfeed_electricity_price_level
+        name: Relative price
+        icon: mdi:traffic-light
+        color: amber
+      - type: tile
+        entity: sensor.estfeed_electricity_previous_price
+        name: Previous · 15 min
+        icon: mdi:clock-arrow-left-outline
+      - type: tile
+        entity: sensor.estfeed_electricity_next_price
+        name: Next · 15 min
+        icon: mdi:clock-arrow-right-outline
+      - type: tile
+        entity: sensor.estfeed_electricity_today_low
+        name: Lowest today
+        icon: mdi:arrow-down-bold
+        color: green
+      - type: tile
+        entity: sensor.estfeed_electricity_today_high
+        name: Highest today
+        icon: mdi:arrow-up-bold
+        color: red
+  - type: markdown
+    content: >-
+      {% set signal = 'sensor.estfeed_electricity_price_high_low' %}
+      {% set forecast = 'sensor.estfeed_electricity_price_forecast' %}
+      {% set state = states(signal) %}
+      **{% if state == 'low' %}Low price · consumption allowed by price{% elif state == 'high' %}High price · consider waiting{% else %}Price guidance unavailable{% endif %}**
+
+      {% set floor = state_attr(signal, 'cheap_price') %}
+      Always-cheap threshold: {{ '%.3f' | format(floor) if floor is number else '—' }} €/kWh.
+      {% if state_attr(signal, 'cheap_price_override') %}Cheap-price override is active.{% endif %}
+
+      {% set tomorrow = state_attr(forecast, 'tomorrow_status') %}
+      {% if tomorrow == 'available' %}Tomorrow's prices are published.{% elif tomorrow == 'partial' %}Tomorrow's prices are only partially available.{% else %}Tomorrow's prices are not available yet.{% endif %}
+      {% if state_attr(forecast, 'last_error') %}Latest refresh failed; known published intervals are retained.{% endif %}
+      {% if state_attr(signal, 'reference_provisional') %}Comparison history is still filling.{% endif %}
+  - type: custom:apexcharts-card
+    header:
+      show: true
+      title: Electricity · today & tomorrow
+      show_states: false
+    # 49h includes BOTH local days even across the autumn clock change.
+    # Only actual today/tomorrow intervals are plotted; the extra space is blank.
+    graph_span: 49h
+    span:
+      start: day
+    update_interval: 1min
+    now:
+      show: true
+      label: Now
+      color: '#94A3B8'
+    apex_config:
+      chart:
+        height: 290
+        toolbar:
+          show: false
+        zoom:
+          enabled: false
+      legend:
+        position: top
+        fontSize: 12px
+      grid:
+        borderColor: 'rgba(148,163,184,0.18)'
+      xaxis:
+        labels:
+          datetimeUTC: false
+          format: dd HH:mm
+          hideOverlappingLabels: true
+      tooltip:
+        shared: true
+        intersect: false
+        x:
+          format: ddd dd MMM HH:mm
+      markers:
+        size: 0
+    series:
+      - entity: sensor.estfeed_electricity_price_forecast
+        name: Today
+        type: line
+        curve: stepline
+        color: '#14B8A6'
+        stroke_width: 2
+        unit: EUR/kWh
+        float_precision: 4
+        extend_to: false
+        show:
+          legend_value: false
+        data_generator: |
+          const rows = entity.attributes.today || [];
+          const points = rows.map(r => [Date.parse(r.start),
+            typeof r.price === 'number' && Number.isFinite(r.price) ? r.price : null]);
+          const last = rows[rows.length - 1];
+          if (last && typeof last.price === 'number' && Number.isFinite(last.price))
+            points.push([Date.parse(last.end) - 1, last.price]);
+          return points;
+      - entity: sensor.estfeed_electricity_price_forecast
+        name: Tomorrow
+        type: line
+        curve: stepline
+        color: '#F59E0B'
+        stroke_width: 2
+        unit: EUR/kWh
+        float_precision: 4
+        extend_to: false
+        show:
+          legend_value: false
+        data_generator: |
+          const rows = entity.attributes.tomorrow || [];
+          const points = rows.map(r => [Date.parse(r.start),
+            typeof r.price === 'number' && Number.isFinite(r.price) ? r.price : null]);
+          const last = rows[rows.length - 1];
+          if (last && typeof last.price === 'number' && Number.isFinite(last.price))
+            points.push([Date.parse(last.end) - 1, last.price]);
+          return points;
+      - entity: sensor.estfeed_electricity_price_forecast
+        name: Always cheap
+        type: line
+        color: '#94A3B8'
+        stroke_width: 1
+        stroke_dash: 5
+        unit: EUR/kWh
+        float_precision: 4
+        extend_to: false
+        show:
+          legend_value: false
+        data_generator: |
+          const value = entity.attributes.cheap_price;
+          const rows = [...(entity.attributes.today || []), ...(entity.attributes.tomorrow || [])];
+          if (!rows.length || typeof value !== 'number' || !Number.isFinite(value)) return [];
+          return [[Date.parse(rows[0].start), value], [Date.parse(rows[rows.length - 1].end) - 1, value]];

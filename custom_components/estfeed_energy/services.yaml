@@ -1,0 +1,9 @@
+sync:
+  name: Sync Estfeed
+  description: Refresh optional public price signals, recent readings and historical backfill. Calls are throttled.
+rescan:
+  name: Rescan Estfeed history
+  description: Restart historical API reconciliation without deleting stored readings. Runs in batches.
+rebuild_statistics:
+  name: Rebuild Estfeed statistics
+  description: Replay the stored source ledger into Recorder, without making API requests.
