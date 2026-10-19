@@ -52,7 +52,8 @@ class Status(Base):
                     latest[field] = iso(max(timestamps))
                     ids[field] = DOMAIN + ':' + object_id(eic, field)
             meters[eic] = {'commodity': point['commodity'], 'latest_reported_intervals': latest,
-                           'statistic_ids': ids, 'last_query': point.get('last_query')}
+                           'statistic_ids': ids, 'last_query': point.get('last_query'),
+                           'last_recent_query': point.get('last_recent_query')}
         pricing = data.get('pricing', {})
         cost_status = {eic: {
             'statistic_id': DOMAIN + ':' + object_id(eic, 'consumption_cost'),
@@ -62,6 +63,10 @@ class Status(Base):
             'pending_windows': len(p.get('pending', [])),
         } for eic, p in pricing.get('points', {}).items()}
         return {'last_error': self.manager.error,
+                'last_recent_sync': data.get('last_recent_sync'),
+                'recent_query_end': iso(data['recent_at']) if 'recent_at' in data else None,
+                'next_recent_poll_due': iso(data['recent_at'] + self.manager.config['poll_hours'] * 3600)
+                    if 'recent_at' in data else None,
                 'pricing_error': pricing.get('last_error'),
                 'costs': cost_status,
                 'backfill_cursor': iso(data['cursor']) if 'cursor' in data else None,

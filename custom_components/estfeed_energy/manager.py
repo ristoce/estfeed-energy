@@ -142,7 +142,8 @@ class Manager:
             await self.save()
 
     async def run(self, force=False):
-        if self.lock.locked():
+        # Timer ticks may be skipped; an explicit sync must not silently vanish.
+        if self.lock.locked() and not force:
             return
         if not force and time.monotonic() < self.next_due:
             async with self.lock:
@@ -163,6 +164,11 @@ class Manager:
                 if force or now - self.data.get('recent_at', 0) >= self.config['poll_hours'] * 3600:
                     await self.fetch_window(recent_start, now)
                     self.data['recent_at'] = now
+                    self.data['last_recent_sync'] = datetime.now(timezone.utc).isoformat()
+                    for point in self.data['points'].values():
+                        query = point.get('last_query')
+                        if query and query['start'] == iso(recent_start) and query['end'] == iso(now):
+                            point['last_recent_query'] = dict(query)
                     await self.save()
                 cursor = self.data['cursor']
                 if cursor < recent_start:
@@ -210,10 +216,15 @@ class Manager:
                     self.data.update(audit_cursor=end, audited_at=now)
                 if cursor < recent_start:
                     self.status = 'backfilling'
-                    self.next_due = time.monotonic() + 60
+                    background_delay = 60
                 else:
                     self.status = 'historical_gaps' if pending else 'up_to_date'
-                    self.next_due = time.monotonic() + (1800 if pending else self.config['poll_hours'] * 3600)
+                    background_delay = 1800 if pending else self.config['poll_hours'] * 3600
+                # Historical-only work must never restart the recent poll clock.
+                # Deduct elapsed run time, too: API retries can take minutes.
+                recent_due = self.data['recent_at'] + self.config['poll_hours'] * 3600
+                recent_delay = max(0, recent_due - datetime.now(timezone.utc).timestamp())
+                self.next_due = time.monotonic() + min(background_delay, recent_delay)
                 self.error = None
                 self.data['last_sync'] = datetime.now(timezone.utc).isoformat()
                 await self.save()

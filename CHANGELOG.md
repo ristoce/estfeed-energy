@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.2 — Recent import scheduling and diagnostics
+
+- Anchor the next consumption poll to the last recent query, rather than restarting the poll interval after historical work.
+- Deduct elapsed sync time when calculating the next poll deadline.
+- Make an explicit `estfeed_energy.sync` wait for a busy importer instead of silently skipping the request.
+- Expose `last_recent_sync`, `recent_query_end`, `next_recent_poll_due`, and per-meter `last_recent_query` separately from historical progress.
+
 ## 0.4.1 — HACS/GitHub packaging
 
 - Add HACS metadata and repository identity setup script.
